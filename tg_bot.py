@@ -7,7 +7,7 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-API_TOKEN = '7738383919:AAHDQiv0y1mksR9EXWJJ9IqJlvt3-H-7m8E'
+API_TOKEN = ''
 logging.basicConfig(level=logging.INFO)
 def bot_init():
     bot = Bot(token=API_TOKEN)
