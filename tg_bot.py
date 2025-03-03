@@ -7,7 +7,7 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-API_TOKEN = ''
+API_TOKEN = '7738383919:AAHDQiv0y1mksR9EXWJJ9IqJlvt3-H-7m8E'
 logging.basicConfig(level=logging.INFO)
 def bot_init():
     bot = Bot(token=API_TOKEN)
@@ -451,7 +451,7 @@ async def send_reminders(bot: Bot):
 async def start(bot:Bot,dp:Dispatcher):
     await bot.delete_webhook()
     try:
-        await asyncio.create_task(send_reminders(bot))
+        asyncio.create_task(send_reminders(bot))
         await dp.start_polling(bot)
     finally:
         await bot.session.close()
