@@ -1,6 +1,5 @@
 from aiogram import Bot, Dispatcher
 import logging
-import asyncio
 from datetime import datetime, timedelta
 from sheets_api import get_service, get_guidelines, write_tests_to_sheet, generate_tests, write_test_results, read_sheet
 from aiogram.filters import Command
@@ -415,43 +414,10 @@ def bot_init():
 
     return bot, dp
 
-async def delete_message_after_delay(bot: Bot, chat_id: int, message_id: int, delay: int = 24 * 60 * 60):
-    """
-    Удаляет сообщение через указанное время
-    Args:
-        bot: экземпляр бота
-        chat_id: ID чата
-        message_id: ID сообщения
-        delay: задержка в секундах (по умолчанию 24 часа)
-    """
-    await asyncio.sleep(delay)  # Ждем 24 часа
-    try:
-        await bot.delete_message(chat_id, message_id)
-    except Exception as e:
-        print(f"Не удалось удалить сообщение: {e}")
-
-async def send_reminders(bot: Bot):
-    """
-    Функция для отправки напоминаний о непройденных тестах
-    Args:
-        bot: экземпляр бота
-    """
-    while True:
-        # Получаем список пользователей, которым нужно отправить напоминание
-        # (заглушка, здесь нужно реализовать логику получения данных из таблицы)
-        users_to_remind = []
-
-        for user in users_to_remind:
-            message = await bot.send_message(user['chat_id'], "Не забудьте пройти тест по теме: {user['topic']}")
-            await asyncio.create_task(delete_message_after_delay(bot, user['chat_id'], message.message_id))
-
-        # Ждем 24 часа перед следующей проверкой
-        await asyncio.sleep(24 * 60 * 60)
 
 async def start(bot:Bot,dp:Dispatcher):
     await bot.delete_webhook()
     try:
-        #asyncio.create_task(send_reminders(bot))
         await dp.start_polling(bot)
     finally:
         await bot.session.close()
