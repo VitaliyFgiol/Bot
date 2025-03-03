@@ -443,7 +443,7 @@ async def send_reminders(bot: Bot):
 
         for user in users_to_remind:
             message = await bot.send_message(user['chat_id'], "Не забудьте пройти тест по теме: {user['topic']}")
-            asyncio.create_task(delete_message_after_delay(bot, user['chat_id'], message.message_id))
+            await asyncio.create_task(delete_message_after_delay(bot, user['chat_id'], message.message_id))
 
         # Ждем 24 часа перед следующей проверкой
         await asyncio.sleep(24 * 60 * 60)
@@ -451,7 +451,7 @@ async def send_reminders(bot: Bot):
 async def start(bot:Bot,dp:Dispatcher):
     await bot.delete_webhook()
     try:
-        asyncio.create_task(send_reminders(bot))
+        #asyncio.create_task(send_reminders(bot))
         await dp.start_polling(bot)
     finally:
         await bot.session.close()
