@@ -1,15 +1,20 @@
+import os
+from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 import logging
 from datetime import datetime, timedelta
-from sheets_api import get_service, get_guidelines, write_tests_to_sheet, generate_tests, write_test_results, read_sheet
+from sheets_api import get_service, get_guidelines, write_tests_to_sheet, generate_tests, write_test_results, read_sheet, split_into_pages, get_tests_for_topic
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-API_TOKEN = ''
+dotenv_path = '.env'
+load_dotenv(dotenv_path)
+token = os.getenv('API_TOKEN')
+spreadsheet = os.getenv('SPREADSHEET_ID')
 logging.basicConfig(level=logging.INFO)
 def bot_init():
-    bot = Bot(token=API_TOKEN)
+    bot = Bot(token=token)
     dp = Dispatcher()
     service = get_service()
     def get_menu_type(menu_type: str, page:int=1):
@@ -102,18 +107,6 @@ def bot_init():
     async def cmd_start(message: Message):
         await menu_keeper.refresh_menu(message.chat.id)
 
-    def split_text_into_pages(text, max_length=4096):
-        """Разбивает текст на страницы по длине"""
-        pages = []
-        while len(text) > max_length:
-            split_index = text[:max_length].rfind('\n')  # Разделяем по последнему разрыву строки
-            if split_index == -1:
-                split_index = max_length
-            pages.append(text[:split_index])
-            text = text[split_index:]
-        pages.append(text)
-        return pages
-
     def process_guideline_material(material):
         """
         Заглушка для обработки материала с помощью нейросети
@@ -154,9 +147,34 @@ def bot_init():
             chat_id=chat_id,
             message_id=message_id,
             text=f"Вопрос {current_index + 1} из {len(session['questions'])}\n\n{question['question']}",
-            reply_markup=keyboard.as_markup()
+            reply_markup = keyboard.as_markup()
         )
 
+    async def show_guidelines(chat_id,message_id):
+        session = menu_keeper.guideline_message_ids[chat_id]
+        current_index = session["current"]
+        page = session["pages"][current_index]
+
+        # Формируем текст с номером страницы
+        text = f"Страница {current_index + 1}/{len(session['pages'])}\n\n{page}"
+
+        # Создаем клавиатуру
+        keyboard = InlineKeyboardBuilder()
+        if current_index > 0:
+            keyboard.add(InlineKeyboardButton(text="⬅️ Назад", callback_data="guideline_prev"))
+        if current_index < len(session["pages"]) - 1:
+            keyboard.add(InlineKeyboardButton(text="➡️ Далее", callback_data="guideline_next"))
+        keyboard.adjust(2)
+        keyboard.add(InlineKeyboardButton(text="Назад к темам", callback_data="back_to_topics"))
+        keyboard.adjust(2)
+
+        # Отправляем/обновляем сообщение
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=keyboard.as_markup()
+        )
     def has_user_passed_test(service, spreadsheet_id, sheet_name, tg_id, topic):
         """
         Проверяет, проходил ли пользователь тест по данной теме
@@ -246,31 +264,48 @@ def bot_init():
     async def send_guidelines(callback_query: CallbackQuery):
         await callback_query.answer()
         chat_id = callback_query.message.chat.id
+        message_id = callback_query.message.message_id
         topic = callback_query.data.split(':')[1]
 
-        # Читаем методические указания
-        guidelines = get_guidelines(service, 'SPREADSHEET_ID', 'Guidelines', topic)
+        # Получаем методические указания
+        guidelines = get_guidelines(service, spreadsheet, 'Лист1', topic)
         if not guidelines:
-            await callback_query.message.answer("Методические указания по этой теме отсутствуют.")
+            await callback_query.message.answer("Методические указания отсутствуют")
             return
 
-            # Обрабатываем материалы с помощью нейросети (заглушка)
-        processed_guidelines = [process_guideline_material(guideline) for guideline in guidelines]
+        # Разбиваем на страницы
+        pages = []
+        for guideline in guidelines:
+            pages.extend(split_into_pages(guideline))  # Используем вашу функцию разбиения
 
-        # Сохраняем ID отправленных сообщений
-        menu_keeper.guideline_message_ids[chat_id] = []
-        for guideline in processed_guidelines:
-            pages = split_text_into_pages(guideline)
-            for page in pages:
-                msg = await callback_query.message.answer(page)
-                menu_keeper.guideline_message_ids[chat_id].append(msg.message_id)
+        menu_keeper.guideline_message_ids[chat_id] = {
+            'current': 0,
+            'pages': pages,
+            'topic': topic
+        }
 
-        # Отображаем клавиатуру для управления
-        keyboard = InlineKeyboardBuilder()
-        keyboard.add(
-            InlineKeyboardButton(text="Назад", callback_data="back_previous")
-        )
-        await callback_query.message.answer("Перелистывание завершено.", reply_markup=keyboard.as_markup())
+        await show_guidelines(chat_id, message_id)
+
+    @dp.callback_query(lambda c: c.data in ['guideline_prev', 'guideline_next'])
+    async def handle_pagination(callback_query: CallbackQuery):
+        await callback_query.answer()
+        chat_id = callback_query.message.chat.id
+        message_id = callback_query.message.message_id
+        direction = 1 if callback_query.data == 'guideline_next' else -1
+        if direction>0:
+            menu_keeper.guideline_message_ids[chat_id]["current"] += 1
+        else:
+            menu_keeper.guideline_message_ids[chat_id]["current"] -= 1
+        await show_guidelines(chat_id, message_id)
+
+
+    @dp.callback_query(lambda c: c.data == 'back_to_topics')
+    async def back_to_topics(callback_query: CallbackQuery):
+        await callback_query.answer()
+        chat_id = callback_query.message.chat.id
+
+        # Возвращаемся к меню тем
+        await menu_keeper.refresh_menu(chat_id, menu_type='guidelines', page=1,update_history=False)
 
     @dp.callback_query(lambda c: c.data.startswith('testing_topic'))
     async def start_test(callback_query: CallbackQuery):
@@ -279,19 +314,23 @@ def bot_init():
         message_id = callback_query.message.message_id
         topic = callback_query.data.split(':')[1]
 
-        if has_user_passed_test(service, 'TEST_SPREADSHEET_ID', 'UserAnswers', chat_id, topic):
-            await callback_query.message.answer(
-                "Вы уже проходили этот тест. Повторное прохождение будет доступно через 24 часа.")
-            return
+        #if has_user_passed_test(service, 'TEST_SPREADSHEET_ID', 'UserAnswers', chat_id, topic):
+        #    await callback_query.message.answer(
+        #        "Вы уже проходили этот тест. Повторное прохождение будет доступно через 24 часа.")
+        #    return
 
             # Проверяем, может ли пользователь перепройти тест
-        if not can_user_retake_test(service, 'TEST_SPREADSHEET_ID', 'UserAnswers', chat_id, topic):
-            await callback_query.message.answer(
-                "Вы уже проходили этот тест. Повторное прохождение будет доступно через 24 часа.")
+        #if not can_user_retake_test(service, 'TEST_SPREADSHEET_ID', 'UserAnswers', chat_id, topic):
+        #    await callback_query.message.answer(
+        #        "Вы уже проходили этот тест. Повторное прохождение будет доступно через 24 часа.")
+        #    return
+
+        tests = get_tests_for_topic(service, spreadsheet, 'Лист2', topic)
+
+        if not tests:
+            await callback_query.message.answer("Тесты по данной теме отсутствуют")
             return
 
-        # Генерируем тест (заглушка) и сохраняем
-        tests = generate_tests(topic)
         menu_keeper.test_sessions[chat_id] = {
             "topic": topic,
             "questions": tests,
@@ -314,6 +353,11 @@ def bot_init():
         await callback_query.answer()
         chat_id = callback_query.message.chat.id
         message_id = callback_query.message.message_id
+
+        session = menu_keeper.test_sessions[chat_id]
+        current_index = session["current_index"]
+        if len(session["answers"])<=current_index:
+            session["answers"].append(0)
         menu_keeper.test_sessions[chat_id]["current_index"] += 1
         await show_question(chat_id,message_id)
 
@@ -354,9 +398,9 @@ def bot_init():
 
         # Сохраняем ответ пользователя
         if current_index < len(session["answers"]):
-            session["answers"][current_index] = answer_index
+            session["answers"][current_index] = answer_index + 1
         else:
-            session["answers"].append(answer_index)
+            session["answers"].append(answer_index + 1)
 
         # Обновляем сообщение с вопросом, чтобы показать выбранный ответ
         await show_question(chat_id, message_id)
@@ -368,11 +412,18 @@ def bot_init():
         message_id = callback_query.message.message_id
         session = menu_keeper.test_sessions[chat_id]
 
-        # Подсчёт баллов (заглушка)
-        score = len([
-            1 for i, q in enumerate(session["questions"])
-            if i < len(session["answers"]) and session["answers"][i] == q["answer"]
-        ])
+        if not session:
+            await callback_query.message.answer("Ошибка тестирования")
+            return
+
+        # Подсчёт баллов
+        correct = 0
+        answers = []
+        for i, q in enumerate(session["questions"]):
+            user_answer = session["answers"][i] if i < len(session["answers"]) else None
+            answers.append(user_answer)
+            if user_answer == q["answer"]:
+                correct += 1
 
         # Показываем результат
         keyboard = InlineKeyboardBuilder()
@@ -380,7 +431,7 @@ def bot_init():
         await bot.edit_message_text(
             chat_id=chat_id,
             message_id=message_id,
-            text=f"Ваш результат: {score} из {len(session['questions'])}",
+            text=f"Ваш результат: {correct} из {len(session['questions'])}",
             reply_markup=keyboard.as_markup()
         )
 
@@ -405,10 +456,10 @@ def bot_init():
         topic = callback_query.data.split(':')[1]
 
         # Генерация тестов (заглушка)
-        tests = generate_tests(topic)
+        tests = generate_tests(service, spreadsheet, 'Лист1', topic)
 
         # Запись тестов в таблицу
-        write_tests_to_sheet(service, 'TEST_SPREADSHEET_ID', 'Tests', topic, tests)
+        write_tests_to_sheet(service, spreadsheet, 'Лист2', topic, tests)
 
         await callback_query.message.answer(f"Тесты по теме '{topic}' сгенерированы и записаны в таблицу.")
 
